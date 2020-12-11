@@ -966,7 +966,7 @@ func baseQemuArgs() []string {
 	case "ppc64le":
 		ret = []string{
 			"qemu-system-ppc64",
-			"-machine", "pseries,kvm-type=HV,vsmt=8," + accel,
+			"-machine", "cap-fwnmi=off,pseries,kvm-type=HV,vsmt=8," + accel,
 		}
 	default:
 		panic(fmt.Sprintf("RpmArch %s combo not supported for qemu ", system.RpmArch()))
@@ -1332,10 +1332,11 @@ func (builder *QemuBuilder) Exec() (*QemuInstance, error) {
 
 	// And the custom arguments
 	argv = append(argv, builder.Argv...)
-
+	fmt.Printf("%v", argv)
 	inst.qemu = exec.Command(argv[0], argv[1:]...)
 
 	cmd := inst.qemu.(*exec.ExecCmd)
+	fmt.Printf("%v", cmd)
 	cmd.Stderr = os.Stderr
 
 	if builder.Pdeathsig {
