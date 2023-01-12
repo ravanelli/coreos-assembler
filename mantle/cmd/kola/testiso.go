@@ -65,6 +65,7 @@ var (
 	enableMultipath  bool
 	enableUefi       bool
 	enableUefiSecure bool
+	isOffline        bool
 
 	// The iso-as-disk tests are only supported in x86_64 because other
 	// architectures don't have the required hybrid partition table.
@@ -460,6 +461,7 @@ func runTestIso(cmd *cobra.Command, args []string) error {
 		enableMultipath = false
 		enableUefi = false
 		enableUefiSecure = false
+		isOffline = false
 		inst := baseInst // Pretend this is Rust and I wrote .copy()
 
 		fmt.Printf("Running test: %s\n", test)
@@ -479,13 +481,12 @@ func runTestIso(cmd *cobra.Command, args []string) error {
 		} else if kola.HasString("uefi", components) {
 			enableUefi = true
 		}
+		if kola.HasString("offline", components) {
+			isOffline = true
+		}
 
 		if kola.HasString("pxe", components) {
-			if kola.HasString("offline", components) {
-				duration, err = testPXE(ctx, inst, filepath.Join(outputDir, test), true)
-			} else {
-				duration, err = testPXE(ctx, inst, filepath.Join(outputDir, test), false)
-			}
+			duration, err = testPXE(ctx, inst, filepath.Join(outputDir, test))
 		} else {
 			if kola.HasString("login", components) {
 				duration, err = testLiveLogin(ctx, filepath.Join(outputDir, test))
@@ -493,9 +494,7 @@ func runTestIso(cmd *cobra.Command, args []string) error {
 				duration, err = testAsDisk(ctx, filepath.Join(outputDir, test))
 			} else {
 				if kola.HasString("offline", components) {
-					duration, err = testLiveIso(ctx, inst, filepath.Join(outputDir, test), true, false)
-				} else {
-					duration, err = testLiveIso(ctx, inst, filepath.Join(outputDir, test), false, false)
+					duration, err = testLiveIso(ctx, inst, filepath.Join(outputDir, test), false)
 				}
 			}
 		}
@@ -593,7 +592,7 @@ func printResult(test string, duration time.Duration, err error) bool {
 	return false
 }
 
-func testPXE(ctx context.Context, inst platform.Install, outdir string, offline bool) (time.Duration, error) {
+func testPXE(ctx context.Context, inst platform.Install, outdir string) (time.Duration, error) {
 	if addNmKeyfile {
 		return 0, errors.New("--add-nm-keyfile not yet supported for PXE")
 	}
@@ -626,7 +625,7 @@ func testPXE(ctx context.Context, inst platform.Install, outdir string, offline 
 	liveConfig.AddSystemdUnit("live-signal-ok.service", liveSignalOKUnit, conf.Enable)
 	liveConfig.AddSystemdUnit("coreos-test-entered-emergency-target.service", signalFailureUnit, conf.Enable)
 
-	if offline {
+	if isOffline {
 		contents := fmt.Sprintf(downloadCheck, kola.CosaBuild.Meta.BuildID, kola.CosaBuild.Meta.OstreeCommit)
 		liveConfig.AddSystemdUnit("coreos-installer-offline-check.service", contents, conf.Enable)
 	}
@@ -636,7 +635,7 @@ func testPXE(ctx context.Context, inst platform.Install, outdir string, offline 
 	targetConfig.AddSystemdUnit("coreos-test-entered-emergency-target.service", signalFailureUnit, conf.Enable)
 	targetConfig.AddSystemdUnit("coreos-test-installer-no-ignition.service", checkNoIgnition, conf.Enable)
 
-	mach, err := inst.PXE(pxeKernelArgs, liveConfig, targetConfig, offline)
+	mach, err := inst.PXE(pxeKernelArgs, liveConfig, targetConfig, isOffline)
 	if err != nil {
 		return 0, errors.Wrapf(err, "running PXE")
 	}
@@ -649,7 +648,7 @@ func testPXE(ctx context.Context, inst platform.Install, outdir string, offline 
 	return awaitCompletion(ctx, mach.QemuInst, outdir, completionChannel, mach.BootStartedErrorChannel, []string{liveOKSignal, signalCompleteString})
 }
 
-func testLiveIso(ctx context.Context, inst platform.Install, outdir string, offline, minimal bool) (time.Duration, error) {
+func testLiveIso(ctx context.Context, inst platform.Install, outdir string, minimal bool) (time.Duration, error) {
 	tmpd, err := ioutil.TempDir("", "kola-testiso")
 	if err != nil {
 		return 0, err
@@ -694,7 +693,7 @@ func testLiveIso(ctx context.Context, inst platform.Install, outdir string, offl
 		inst.NmKeyfiles[nmConnectionFile] = nmConnection
 	}
 
-	mach, err := inst.InstallViaISOEmbed(nil, liveConfig, targetConfig, outdir, offline, minimal)
+	mach, err := inst.InstallViaISOEmbed(nil, liveConfig, targetConfig, outdir, isOffline, minimal)
 	if err != nil {
 		return 0, errors.Wrapf(err, "running iso install")
 	}
