@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,6 +279,17 @@ func init() {
 	root.AddCommand(cmdTestIso)
 }
 
+func generateRandomPath() string {
+	charset := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	sb := strings.Builder{}
+	sb.WriteString("tmp/kola/kolaTestIso-")
+	sb.Grow(6)
+	for i := 0; i < 6; i++ {
+		sb.WriteByte(charset[rand.Intn(len(charset))])
+	}
+	return sb.String()
+}
+
 func liveArtifactExistsInBuild() error {
 
 	if kola.CosaBuild.Meta.BuildArtifacts.LiveIso == nil || kola.CosaBuild.Meta.BuildArtifacts.LiveKernel == nil {
@@ -420,6 +432,10 @@ func runTestIso(cmd *cobra.Command, args []string) error {
 				tests = append(tests, test)
 			}
 		}
+	}
+
+	if outputDir == "" || outputDir == "tmp/kola" {
+		outputDir = generateRandomPath()
 	}
 
 	// note this reassigns a *global*
