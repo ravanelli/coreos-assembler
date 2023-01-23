@@ -472,6 +472,7 @@ func runTestIso(cmd *cobra.Command, args []string) error {
 
 	var duration time.Duration
 
+	atLeastOneFailed := false
 	for _, test := range finalTests {
 
 		// All of these tests require buildextend-live to have been run
@@ -523,7 +524,13 @@ func runTestIso(cmd *cobra.Command, args []string) error {
 		default:
 			plog.Fatalf("Unknown test name:%s", test)
 		}
-		printResult(test, duration, err)
+		if printResult(test, duration, err) {
+			atLeastOneFailed = true
+		}
+	}
+
+	if atLeastOneFailed {
+		return harness.SuiteFailed
 	}
 
 	return nil
