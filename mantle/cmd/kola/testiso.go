@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/coreos-assembler/mantle/harness"
 	"github.com/coreos/coreos-assembler/mantle/platform/conf"
 	"github.com/coreos/coreos-assembler/mantle/util"
 	coreosarch "github.com/coreos/stream-metadata-go/arch"
@@ -46,15 +47,13 @@ var (
 	cmdTestIso = &cobra.Command{
 		RunE:    runTestIso,
 		PreRunE: preRun,
-		Use:     "testiso",
+		Use:     "testiso [glob pattern...]",
 		Short:   "Test a CoreOS PXE boot or ISO install path",
 
 		SilenceUsage: true,
 	}
 
 	instInsecure bool
-
-	tests []string
 
 	pxeAppendRootfs bool
 	pxeKernelArgs   []string
@@ -122,7 +121,6 @@ var (
 		"pxe-online-install.uefi",
 		"pxe-online-install.4k.uefi",
 	}
-	allPatterns = make(map[string]bool)
 )
 
 const (
@@ -273,8 +271,6 @@ func init() {
 	cmdTestIso.Flags().BoolVar(&console, "console", false, "Connect qemu console to terminal, turn off automatic initramfs failure checking")
 	cmdTestIso.Flags().BoolVar(&pxeAppendRootfs, "pxe-append-rootfs", false, "Append rootfs to PXE initrd instead of fetching at runtime")
 	cmdTestIso.Flags().StringSliceVar(&pxeKernelArgs, "pxe-kargs", nil, "Additional kernel arguments for PXE")
-	cmdTestIso.Flags().StringSliceVar(&tests, "tests", getArchPatternsList(), "Tests available")
-	cmdTestIso.Args = cobra.ExactArgs(0)
 
 	root.AddCommand(cmdTestIso)
 }
@@ -396,32 +392,44 @@ func newQemuBuilderWithDisk(outdir string) (*platform.QemuBuilder, *conf.Conf, e
 	return builder, config, nil
 }
 
+// See similar semantics in the `filterTests` of `kola.go`.
+func filterTests(tests []string, patterns []string) ([]string, error) {
+	r := []string{}
+	for _, test := range tests {
+		if matches, err := kola.MatchesPatterns(test, patterns); err != nil {
+			return nil, err
+		} else if matches {
+			r = append(r, test)
+		}
+	}
+	return r, nil
+}
+
 func runTestIso(cmd *cobra.Command, args []string) error {
+	var err error
+	tests := getArchPatternsList()
+	if len(args) != 0 {
+		if tests, err = filterTests(tests, args); err != nil {
+			return err
+		} else if len(tests) == 0 {
+			return harness.SuiteEmpty
+		}
+	}
+
 	if kola.CosaBuild == nil {
 		return fmt.Errorf("Must provide --build")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	for _, s := range getArchPatternsList() {
-		allPatterns[s] = true
-	}
-	targetArchTestsList := make(map[string]bool)
-	for _, test := range tests {
-		if _, ok := allPatterns[test]; !ok {
-			return fmt.Errorf("Unknown test: %s", test)
-		}
-		targetArchTestsList[test] = true
-	}
-
 	// Call `ParseDenyListYaml` to populate the `kola.DenylistedTests` var
-	err := kola.ParseDenyListYaml("qemu")
+	err = kola.ParseDenyListYaml("qemu")
 	if err != nil {
 		plog.Fatal(err)
 	}
 
-	tests = []string{}
-	for test := range targetArchTestsList {
+	finalTests := []string{}
+	for _, test := range tests {
 		if !kola.HasString(test, kola.DenylistedTests) {
 			matchTest, err := kola.MatchesPatterns(test, kola.DenylistedTests)
 			if err != nil {
@@ -429,7 +437,7 @@ func runTestIso(cmd *cobra.Command, args []string) error {
 
 			}
 			if !matchTest {
-				tests = append(tests, test)
+				finalTests = append(finalTests, test)
 			}
 		}
 	}
@@ -464,7 +472,7 @@ func runTestIso(cmd *cobra.Command, args []string) error {
 
 	var duration time.Duration
 
-	for _, test := range tests {
+	for _, test := range finalTests {
 
 		// All of these tests require buildextend-live to have been run
 		err = liveArtifactExistsInBuild()
