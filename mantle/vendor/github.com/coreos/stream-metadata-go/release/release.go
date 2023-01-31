@@ -66,6 +66,8 @@ type Media struct {
 	Openstack    *PlatformBase     `json:"openstack"`
 	PowerVS      *PlatformIBMCloud `json:"powervs"`
 	Qemu         *PlatformBase     `json:"qemu"`
+	QemuSecex    *PlatformBase     `json:"qemu-secex"`
+	VirtualBox   *PlatformBase     `json:"virtualbox"`
 	Vmware       *PlatformBase     `json:"vmware"`
 	Vultr        *PlatformBase     `json:"vultr"`
 }
@@ -102,7 +104,7 @@ type PlatformIBMCloud struct {
 // PlatformKubeVirt containerDisk metadata
 type PlatformKubeVirt struct {
 	PlatformBase
-	Image *KubeVirtContainerDisk `json:"image"`
+	Image *ContainerImage `json:"image"`
 }
 
 // ImageFormat contains all artifacts for a single OS image
@@ -126,6 +128,13 @@ type CloudImage struct {
 	Image string `json:"image"`
 }
 
+// ContainerImage represents a tagged container image
+type ContainerImage struct {
+	// Preferred way to reference the image, which might be by tag or digest
+	Image     string `json:"image"`
+	DigestRef string `json:"digest-ref"`
+}
+
 // GcpImage represents a GCP cloud image
 type GcpImage struct {
 	Project string `json:"project"`
@@ -138,9 +147,4 @@ type IBMCloudImage struct {
 	Object string `json:"object"`
 	Bucket string `json:"bucket"`
 	Url    string `json:"url"`
-}
-
-// KubeVirtContainerDisk describes a disk image inside a container which can be consumed by a KubeVirt based platform
-type KubeVirtContainerDisk struct {
-	Image string `json:"image,omitempty"`
 }
