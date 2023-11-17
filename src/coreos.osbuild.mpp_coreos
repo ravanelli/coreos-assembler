@@ -70,8 +70,8 @@ pipelines:
             origin: org.osbuild.source
             mpp-resolve-images:
               images:
-                - source: quay.io/fedora/fedora-coreos
-                  tag: next
+                - source: registry.gitlab.com/redhat/services/products/image-builder/ci/images/fedora-coreos
+                  tag: stable
       - type: org.osbuild.ostree.selinux
         options:
           deployment:
@@ -185,38 +185,7 @@ pipelines:
             source: efi
             target: /boot/efi
       - type: org.osbuild.bootupd
-        inputs:
-          tree:
-            type: org.osbuild.tree
-            origin: org.osbuild.pipeline
-            references:
-              - name:tree
-        options:
-          paths:
-            - from: input://tree/
-              to: mount://root/
-          deployment:
-            osname: fedora-coreos
-            ref: ostree/1/1/0
-          arch:
-            mpp-format-string: '{arch}'
         devices:
-          efi:
-            type: org.osbuild.loopback
-            options:
-              filename: disk.img
-              start:
-                mpp-format-int: '{image.layout[''EFI-SYSTEM''].start}'
-              size:
-                mpp-format-int: '{image.layout[''EFI-SYSTEM''].size}'
-          boot:
-            type: org.osbuild.loopback
-            options:
-              filename: disk.img
-              start:
-                mpp-format-int: '{image.layout[''boot''].start}'
-              size:
-                mpp-format-int: '{image.layout[''boot''].size}'
           root:
             type: org.osbuild.loopback
             options:
@@ -225,6 +194,14 @@ pipelines:
                 mpp-format-int: '{image.layout[''root''].start}'
               size:
                 mpp-format-int: '{image.layout[''root''].size}'
+          boot:
+            type: org.osbuild.loopback
+            options:
+              filename: disk.img
+              start:
+                mpp-format-int: '{image.layout[''boot''].start}'
+              size:
+                mpp-format-int: '{image.layout[''boot''].size}'
         mounts:
           - name: root
             type: org.osbuild.xfs
@@ -234,27 +211,13 @@ pipelines:
             type: org.osbuild.ext4
             source: boot
             target: /boot
-          - name: efi
-            type: org.osbuild.fat
-            source: efi
-            target: /boot/efi
-      - type: org.osbuild.grub2.inst
         options:
-          platform: i386-pc
-          filename: disk.img
-          location:
-            mpp-format-int: '{image.layout[''BIOS-BOOT''].start}'
-          core:
-            type: mkimage
-            partlabel: gpt
-            filesystem: ext4
-          prefix:
-            type: partition
-            partlabel:
-              mpp-format-string: '{image.layout.label}'
-            number:
-              mpp-format-int: '{image.layout[''boot''].index}'
-            path: /grub2
+          deployment:
+            osname: fedora-coreos
+            ref: ostree/1/1/0
+          arch:
+            mpp-format-string: '{arch}'
+          bios: true
   - name: raw-metal-image
     build: name:build
     stages:

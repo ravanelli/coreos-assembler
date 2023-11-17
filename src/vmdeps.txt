@@ -38,3 +38,4 @@ podman
 
 # For running osbuild
 osbuild osbuild-ostree osbuild-selinux osbuild-tools python3-pyrsistent
+patch git
