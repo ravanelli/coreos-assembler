@@ -1,4 +1,6 @@
 version: '2'
+mpp-vars:
+  filename: $filename
 mpp-define-image:
   id: image
   #10G
@@ -26,15 +28,7 @@ mpp-define-image:
         type: 0FC63DAF-8483-4772-8E79-3D69D8477DE4
         uuid: CA7D7CCB-63ED-4C53-861C-1742536059CC
 pipelines:
-  - mpp-import-pipelines:
-      path: fedora-vars.ipp.yaml
-  - mpp-import-pipeline:
-      path: fedora-build-v2.ipp.yaml
-      id: build
-    runner:
-      mpp-format-string: org.osbuild.fedora{release}
   - name: tree
-    build: name:build
     source-epoch: 1659397331
     stages:
       - type: org.osbuild.ostree.init-fs
@@ -54,10 +48,10 @@ pipelines:
             - path: /boot/efi
               mode: 448
       - type: org.osbuild.ignition
-      - type: org.osbuild.ostree.deploy.container
+      - type: org.osbuild.ostree.deploy
         options:
           osname: fedora-coreos
-          target_imgref: ostree-remote-registry:fedora:quay.io/fedora/fedora-coreos:stable
+          remote: fedora
           mounts:
             - /boot
             - /boot/efi
@@ -65,20 +59,20 @@ pipelines:
             - rw
             - '$ignition_firstboot'
         inputs:
-          images:
-            type: org.osbuild.containers
+          commits:
+            type: org.osbuild.ostree
             origin: org.osbuild.source
-            mpp-resolve-images:
-              images:
-                - source: quay.io/fedora/fedora-coreos
-                  tag: next
+            mpp-resolve-ostree-commits:
+              commits:
+                - ref: $ref
+                  remote:
+                    url: $repourl
       - type: org.osbuild.ostree.selinux
         options:
           deployment:
             osname: fedora-coreos
             ref: ostree/1/1/0
   - name: raw-image
-    build: name:build
     stages:
       - type: org.osbuild.truncate
         options:
@@ -237,26 +231,8 @@ pipelines:
           - name: efi
             type: org.osbuild.fat
             source: efi
-            target: /boot/efi
-      - type: org.osbuild.grub2.inst
-        options:
-          platform: i386-pc
-          filename: disk.img
-          location:
-            mpp-format-int: '{image.layout[''BIOS-BOOT''].start}'
-          core:
-            type: mkimage
-            partlabel: gpt
-            filesystem: ext4
-          prefix:
-            type: partition
-            partlabel:
-              mpp-format-string: '{image.layout.label}'
-            number:
-              mpp-format-int: '{image.layout[''boot''].index}'
-            path: /grub2
+            target: /boot/efi    
   - name: raw-metal-image
-    build: name:build
     stages:
       - type: org.osbuild.copy
         inputs:
@@ -289,7 +265,6 @@ pipelines:
             source: boot
             target: /
   - name: raw-qemu-image
-    build: name:build
     stages:
       - type: org.osbuild.copy
         inputs:
@@ -324,7 +299,6 @@ pipelines:
             source: boot
             target: /
   - name: metal
-    build: name:build
     stages:
       - type: org.osbuild.copy
         inputs:
@@ -336,9 +310,9 @@ pipelines:
         options:
           paths:
             - from: input://tree/disk.img
-              to: tree:///metal.raw
+              to:
+                mpp-format-string: 'tree:///{filename}'
   - name: qemu
-    build: name:build
     stages:
       - type: org.osbuild.qemu
         inputs:
@@ -349,7 +323,8 @@ pipelines:
               name:raw-qemu-image:
                 file: disk.img
         options:
-          filename: qemu.qcow2
+          filename:
+            mpp-format-string: '{filename}'
           format:
             type: qcow2
             compat: '1.1'
