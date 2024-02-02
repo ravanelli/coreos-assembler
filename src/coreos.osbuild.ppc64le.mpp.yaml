@@ -108,6 +108,11 @@ pipelines:
               bootloader: none
               # https://github.com/coreos/fedora-coreos-tracker/issues/1333
               bls-append-except-default: grub_users=""
+      - type: org.osbuild.mkdir
+        options:
+          paths:
+            - path: /boot/coreos
+              mode: 448
       - type: org.osbuild.ignition
       # Deploy via container if we have a container ociarchive, else from repo.
       - mpp-if: ociarchive != ''
@@ -269,6 +274,43 @@ pipelines:
             partition:
               mpp-format-int: '{image.layout[''boot''].partnum}'
             target: /boot
+      - type: org.osbuild.copy
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              - name:tree
+        options:
+          paths:
+            - from: mount://ostree.deployment/usr/share/coreos-assembler/platforns.json
+              to: mount://boot/image.json
+        devices:
+          disk:
+            type: org.osbuild.loopback
+            options:
+              filename: disk.img
+              partscan: true
+        mounts:
+          - name: root
+            type: org.osbuild.xfs
+            source: disk
+            partition:
+              mpp-format-int: '{image.layout[''root''].partnum}'
+            target: /
+          - name: boot
+            type: org.osbuild.ext4
+            source: disk
+            partition:
+              mpp-format-int: '{image.layout[''boot''].partnum}'
+            target: /boot/coreos
+          - name: ostree.deployment
+            type: org.osbuild.ostree.deployment
+            options:
+              source: mount
+              deployment:
+                osname: fedora-coreos
+                ref: ostree/1/1/0
       - type: org.osbuild.bootupd
         options:
           bios:

@@ -214,5 +214,5 @@ else
   install_ocp_tools
   trust_redhat_gpg_keys
   configure_user
-  patch_osbuild
+ # patch_osbuild
 fi
