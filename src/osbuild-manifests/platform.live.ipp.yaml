@@ -1,0 +1,63 @@
+version: '2'
+pipelines:
+  - name: live-image
+    build:
+      mpp-format-string: '{buildroot}'
+    stages:
+      - type: org.osbuild.copy
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              - name:raw-image
+        options:
+          paths:
+            - from: input://tree/disk.img
+              to: tree:///disk.img
+      - type: org.osbuild.bootiso.mono
+        inputs:
+          rootfs:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              - name:raw-image
+        options:
+          product:
+            name: "Fedora CoreOs LiveISO"
+            version: "1.0"
+          isolabel: "FedoraIsoLabel"
+          kernel: "6.9.9-200"
+          efi:
+             architectures:
+              - "x86"
+             vendor: "Fedora"
+          isolinux:
+           enabled: true
+           debug: true
+          templates: "99-generic"
+          rootfs:
+             size: 3584
+             compression:
+               method: "xz"
+               options:
+                 bcj: "x86"
+        devices:
+          disk:
+            type: org.osbuild.loopback
+            options:
+              filename: disk.img
+              partscan: true
+        mounts:
+          - name: root
+            type: org.osbuild.xfs
+            source: disk
+            partition:
+              mpp-format-int: '{image.layout[''root''].partnum}'
+            target: /
+          - name: ostree.deployment
+            type: org.osbuild.ostree.deployment
+            options:
+              source: mount
+              deployment:
+                default: true

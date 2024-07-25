@@ -1,0 +1,375 @@
+#!/usr/bin/python3
+import contextlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+import osbuild.api
+import osbuild.remoteloop as remoteloop
+
+LORAX_TEMPLATES = "/usr/share/lorax/templates.d"
+
+import json
+import yaml
+
+repo="/run/osbuild/mounts/sysroot/ostree/repo"
+commit="3f2aad5659d75f7ad2197be441ba481a58779f2b4dd9f8b8a6c40408cfbf8e6b"
+@contextlib.contextmanager
+def mount(source, dest):
+    subprocess.run(["mount", source, dest], check=True)
+    try:
+        yield dest
+    finally:
+        subprocess.run(["umount", "-R", dest], check=True)
+
+
+def install(src, dst, mode=None):
+    shutil.copyfile(src, dst)
+    if mode:
+        os.chmod(dst, mode)
+
+
+def replace(target, patterns):
+    finder = [(re.compile(p), s) for p, s in patterns]
+    newfile = target + ".replace"
+
+    with open(target, "r", encoding="utf8") as i, open(newfile, "w", encoding="utf8") as o:
+        for line in i:
+            for p, s in finder:
+                line = p.sub(s, line)
+            o.write(line)
+    os.rename(newfile, target)
+
+
+def make_rootfs(tree, image, size, workdir, loop_client):
+    with open(image, "w", encoding="utf8") as f:
+        os.ftruncate(f.fileno(), size)
+
+    root = os.path.join(workdir, "rootfs")
+    os.makedirs(root)
+
+    with loop_client.device(image, 0, size) as dev:
+        subprocess.run(["mkfs.ext4",
+                        "-L", "Anaconda",
+                        "-b", "4096",
+                        "-m", "0",
+                        dev],
+                       input="y", encoding='utf8', check=True)
+
+        with mount(dev, root):
+            print("copying tree")
+            subprocess.run(["cp", "-a", f"{tree}/.", root],
+                           check=True)
+            subprocess.run(["find", "/", "-name", "initramfs"],
+                           check=True)
+            print("done")
+
+
+def make_efi(efi, info, root, loop_client):
+    arches = efi["architectures"]
+    vendor = efi["vendor"]
+
+    efidir = os.path.join(root, "EFI", "BOOT")
+    os.makedirs(efidir)
+
+    # arch related data
+    for arch in arches:
+        arch = arch.lower()
+        targets = [
+            (f"shim{arch}.efi", f"BOOT{arch}.EFI".upper()),
+            (f"mm{arch}.efi", f"mm{arch}.efi"),
+            (f"gcd{arch}.efi", f"grub{arch}.efi")
+        ]
+
+        for src, dst in targets:
+            shutil.copy2(os.path.join("/boot/efi/EFI/", vendor, src),
+                         os.path.join(efidir, dst))
+
+    # the font
+    fontdir = os.path.join(efidir, "fonts")
+    os.makedirs(fontdir, exist_ok=True)
+    shutil.copy2("/usr/share/grub/unicode.pf2", fontdir)
+
+    # the config
+    configdir = info["configdir"]
+    version = info["version"]
+    name = info["name"]
+    isolabel = info["isolabel"]
+    cmdline = info["cmdline"]
+
+    kdir = "/" + os.path.relpath(info["kerneldir"], start=root)
+    print(f"kernel dir at {kdir}")
+
+    config = os.path.join(efidir, "grub.cfg")
+    shutil.copy2(os.path.join(configdir, "grub2-efi.cfg"), config)
+
+    replace(config, [
+        ("@VERSION@", version),
+        ("@PRODUCT@", name),
+        ("@KERNELNAME@", "vmlinuz"),
+        ("@KERNELPATH@", os.path.join(kdir, "vmlinuz")),
+        ("@INITRDPATH@", os.path.join(kdir, "initrd.img")),
+        ("@ISOLABEL@", isolabel),
+        ("@ROOT@", cmdline)
+    ])
+
+    if "IA32" in arches:
+        shutil.copy2(config, os.path.join(efidir, "BOOT.cfg"))
+
+    # estimate the size
+    blocksize = 2048
+    size = blocksize * 256  # blocksize * overhead
+    for parent, dirs, files in os.walk(efidir):
+        for name in files + dirs:
+            t = os.path.join(parent, name)
+            s = os.stat(t).st_size
+            d = s % blocksize
+            if not s or d:
+                s += blocksize - d
+            size += s
+    print(f"Estimates efiboot size to be {size}")
+
+    # create the image
+    image = os.path.join(info["imgdir"], "efiboot.img")
+    with open(image, "w", encoding="utf8") as f:
+        os.ftruncate(f.fileno(), size)
+
+    root = os.path.join(info["workdir"], "mnt")
+    os.makedirs(root)
+
+    with loop_client.device(image, 0, size) as dev:
+        subprocess.run(["mkfs.fat",
+                        "-n", "ANACONDA",
+                        dev],
+                       input="y", encoding='utf8', check=True)
+
+        with mount(dev, root):
+            target = os.path.join(root, "EFI", "BOOT")
+            shutil.copytree(efidir, target)
+        subprocess.run(["ls", root], check=True)
+
+
+def make_isolinux(cfg, root, info, tree):
+    # the config
+    configdir = info["configdir"]
+    version = info["version"]
+    name = info["name"]
+    cmdline = info["cmdline"]
+    kerneldir = info["kerneldir"]
+
+    # boot loader
+    isolinux = os.path.join(root, "isolinux")
+    os.makedirs(isolinux)
+
+    isolinuxfiles = [("isolinux.bin", 0o755),
+                     ("ldlinux.c32", 0o755),
+                     ("libcom32.c32", 0o755),
+                     ("libutil.c32", 0o755),
+                     ("vesamenu.c32", 0o755)]
+    for target, mode in isolinuxfiles:
+        src = os.path.join("/usr/share/syslinux/", target)
+        dst = os.path.join(isolinux, target)
+        install(src, dst, mode)
+
+    if cfg.get("debug"):
+        src = "/usr/share/syslinux/isolinux-debug.bin"
+        dst = os.path.join(isolinux, "isolinux.bin")
+        install(src, dst, 0o755)
+
+    for target in ["isolinux.cfg", "boot.msg", "grub.conf"]:
+        src = os.path.join(configdir, target)
+        dst = os.path.join(isolinux, target)
+        install(src, dst)
+
+        replace(dst, [
+            ("@VERSION@", version),
+            ("@PRODUCT@", name),
+            ("@ROOT@", cmdline)
+        ])
+
+    src = os.path.join(tree, "usr/share/anaconda/boot/syslinux-splash.png")
+    dst = os.path.join(isolinux, "splash.png")
+    install(src, dst)
+
+    # link the kernel
+    os.link(os.path.join(kerneldir, "vmlinuz"),
+            os.path.join(isolinux, "vmlinuz"))
+    os.link(os.path.join(kerneldir, "initrd.img"),
+            os.path.join(isolinux, "initrd.img"))
+
+def runcmd(cmd: list, quiet: bool = False, **kwargs: int) -> subprocess.CompletedProcess:
+    import logging
+    '''
+    Run the given command using subprocess.run and perform verification.
+    @param cmd: list that represents the command to be executed
+    @param kwargs: key value pairs that represent options to run()
+    '''
+    try:
+        # default to error on failed command
+        pargs = {"check": True}
+        pargs.update(kwargs)
+        # capture_output is only on python 3.7+. Provide convenience here
+        # until 3.7 is a baseline:
+        if pargs.pop('capture_output', False):
+            pargs['stdout'] = subprocess.PIPE
+            pargs['stderr'] = subprocess.PIPE
+        if not quiet:
+            logging.info(f"Running command: {cmd}")
+        cp = subprocess.run(cmd, **pargs)
+    except subprocess.CalledProcessError as e:
+        logging.error("Command returned bad exitcode")
+        logging.error(f"COMMAND: {cmd}")
+        if e.stdout:
+            logging.error(f" STDOUT: {e.stdout.decode()}")
+        if e.stderr:
+            logging.error(f" STDERR: {e.stderr.decode()}")
+        raise e
+    return cp  # subprocess.CompletedProcess
+def get_os_features():
+    features = {
+        # coreos-installer >= 0.12.0
+        'installer-config': True,
+        # coreos/fedora-coreos-config@3edd2f28
+        'live-initrd-network': True,
+    }
+
+    # coreos-installer >= 0.16.0
+    try:
+        f = runcmd(['/usr/bin/ostree', 'cat', '--repo', repo, commit,
+                    '/usr/share/coreos-installer/example-config.yaml'],
+                   capture_output=True).stdout.decode()
+        features['installer-config-directives'] = {
+            k: True for k in yaml.safe_load(f)
+        }
+    except subprocess.CalledProcessError as e:
+        if e.returncode == 1:
+            print('coreos-installer example-config.yaml not found.  Not setting feature.')
+        else:
+            raise
+
+    return features
+# pylint: disable=too-many-statements
+def main(inputs, root, options, workdir, loop_client):
+    tree = inputs["rootfs"]["path"]
+    name = options["product"]["name"]
+    version = options["product"]["version"]
+    kernel = options["kernel"]
+    isolabel = options["isolabel"]
+    templates = options["templates"]
+    efi = options.get("efi")
+    isolinux = options.get("isolinux", {})
+    kopts = options.get("kernel_opts")
+    rootfs = options.get("rootfs", {})
+
+    # convention for kernel and initramfs names
+    kernel_img = 'vmlinuz'
+    initrd_img = 'initrd.img'
+    # other files
+    rootfs_img = 'rootfs.img'
+    kargs_file = 'kargs.json'
+    igninfo_file = 'igninfo.json'
+    initramfs_img = 'initramfs.img'
+    tmpdir = os.environ.get("FORCE_TMPDIR", "/tmp/buildpost-live")
+    if os.path.isdir(tmpdir):
+        shutil.rmtree(tmpdir)
+    tmpisoroot = os.path.join(tmpdir, 'live')
+    tmpisocoreos = os.path.join(tmpisoroot, 'coreos')
+    tmpisoimages = os.path.join(tmpisoroot, 'images')
+    tmpisoimagespxe = os.path.join(tmpisoimages, 'pxeboot')
+    tmpisoisolinux = os.path.join(tmpisoroot, 'isolinux')
+    # contents of initramfs on both PXE and ISO
+    tmpinitrd_base = os.path.join(tmpdir, 'initrd')
+    # contents of rootfs image
+    tmpinitrd_rootfs = os.path.join(tmpdir, 'initrd-rootfs')
+    
+    for d in (tmpdir, tmpisoroot, tmpisocoreos, tmpisoimages, tmpisoimagespxe,
+            tmpisoisolinux, tmpinitrd_base, tmpinitrd_rootfs):
+        os.mkdir(d)
+
+
+    process = runcmd(['/usr/bin/ostree', 'ls', '--repo', repo,
+                     '--nul-filenames-only', commit,
+                     '/usr/lib/modules'], capture_output=True)
+    moduledir = process.stdout.decode().split('\0')[1]
+    for file in [kernel_img, initramfs_img]:
+        runcmd(['/usr/bin/ostree', 'checkout', '--force-copy', '--repo', repo,
+                '--user-mode', '--subpath', os.path.join(moduledir, file),
+                commit, tmpisoimagespxe])
+        os.chmod(os.path.join(tmpisoimagespxe, file), 0o644)
+        if file == initramfs_img:
+            os.rename(
+                os.path.join(tmpisoimagespxe, initramfs_img),
+                os.path.join(tmpisoimagespxe, initrd_img)
+            )
+    # Generate initramfs stamp file indicating that this is a live
+    # initramfs.  Store the build ID in it.
+    stamppath = os.path.join(tmpinitrd_base, 'etc/coreos-live-initramfs')
+    os.makedirs(os.path.dirname(stamppath), exist_ok=True)
+    with open(stamppath, 'w') as fh:
+        fh.write("buildid-123" + '\n')
+
+    # Generate rootfs stamp file with the build ID, indicating that the
+    # rootfs has been appended and confirming that initramfs and rootfs are
+    # from the same build.
+    stamppath = os.path.join(tmpinitrd_rootfs, 'etc/coreos-live-rootfs')
+    os.makedirs(os.path.dirname(stamppath), exist_ok=True)
+    with open(stamppath, 'w') as fh:
+        fh.write("buildid-123" + '\n')
+
+    # Add placeholder for Ignition CPIO file.  This allows an external tool,
+    # `coreos-installer iso ignition embed`, to modify an existing ISO image
+    # to embed a user's custom Ignition config.  The tool wraps the Ignition
+    # config in a cpio.xz and write it directly into this file in the ISO
+    # image.  The cpio.xz will be read into the initramfs filesystem at
+    # runtime and the Ignition Dracut module will ensure that the config is
+    # moved where Ignition will see it. We only handle !s390x here since that's
+    # the simple case (where layered initrds are supported). The s390x case is
+    # handled lower down
+   # if basearch != 's390x':
+   #     with open(os.path.join(tmpisoimages, 'ignition.img'), 'wb') as fdst:
+   #         fdst.write(bytes(ignition_img_size))
+   #     igninfo_json = {'file': 'images/ignition.img'}
+
+   # Generate JSON file that lists OS features available to
+    # coreos-installer {iso|pxe} customize.  Put it in the initramfs for
+    # pxe customize and the ISO for iso customize.
+    features = json.dumps(get_os_features(), indent=2, sort_keys=True) + '\n'
+    featurespath = os.path.join(tmpinitrd_base, 'etc/coreos/features.json')
+    os.makedirs(os.path.dirname(featurespath), exist_ok=True)
+    with open(featurespath, 'w') as fh:
+        fh.write(features)
+    with open(os.path.join(tmpisocoreos, 'features.json'), 'w') as fh:
+        fh.write(features)
+
+    # Get PRETTY_NAME
+    with tempfile.TemporaryDirectory() as tmpd:
+        runcmd(['/usr/bin/ostree', 'checkout', '--repo', repo, '--user-mode',
+                '--subpath', "/usr/lib/os-release", commit, tmpd])
+        pretty_name = subprocess.check_output(['sh', '-euc', '. ./os-release; echo -n $PRETTY_NAME'],
+                                              encoding='utf-8', cwd=tmpd)
+
+    # Add osmet files
+    tmp_osmet = os.path.join(tmpinitrd_rootfs, img_metal_obj['path'] + '.osmet')
+    fast_arg = []
+    if args.fast:
+        fast_arg = ['--fast']
+    print('Generating osmet file for 512b metal image')
+    runcmd(['/usr/lib/coreos-assembler/runvm-coreos-installer', img_metal,
+            tmp_osmet, 'pack', 'osmet', '/dev/disk/by-id/virtio-coreos',
+            '--description', pretty_name, '--checksum', img_metal_checksum,
+            '--output', '/var/tmp/coreos-installer-output'] + fast_arg)
+    print("Done")
+
+if __name__ == '__main__':
+    args = osbuild.api.arguments()
+    _output_dir = args["tree"]
+    with tempfile.TemporaryDirectory(dir=_output_dir) as _workdir:
+        ret = main(args["inputs"],
+                   _output_dir,
+                   args["options"],
+                   _workdir,
+                   remoteloop.LoopClient("/run/osbuild/api/remoteloop"))
+    sys.exit(ret)
