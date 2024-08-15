@@ -23,6 +23,10 @@ from cosalib.cmdlib import runcmd, sha256sum_file
 from cosalib.cmdlib import import_ostree_commit, get_basearch, ensure_glob
 from cosalib.meta import GenericBuildMeta
 
+from pathlib import Path
+
+COSA_USE_LIVEISO = os.getenv("COSA_USE_LIVEISO", "")
+
 live_exclude_kargs = set([
     '$ignition_firstboot',   # unsubstituted variable in grub config
     'console',               # no serial console by default on ISO
@@ -91,42 +95,69 @@ name_version = f'{base_name}-{args.build}'
 # to shorten this more intelligently, otherwise we truncate the
 # version which may impede uniqueness.
 volid = name_version[0:32]
+build_path = Path(f"./{builddir}/{base_name}-{args.build}").resolve()
+kernel_name = f'{base_name}-{args.build}-live-kernel-{basearch}'
+initramfs_name = f'{base_name}-{args.build}-live-initramfs.{basearch}.img'
+rootfs_name = f'{base_name}-{args.build}-live-rootfs.{basearch}.img'
+kernel_file = os.path.join(builddir, kernel_name)
+initramfs_file = os.path.join(builddir, initramfs_name)
+rootfs_file = os.path.join(builddir, rootfs_name)
 
-tmpdir = os.environ.get("FORCE_TMPDIR", f"{workdir}/tmp/buildpost-live")
-if os.path.isdir(tmpdir):
-    shutil.rmtree(tmpdir)
+data = {
+    "buildid": args.build,
+    "imgid": iso_name,
+    "ostree-commit": buildmeta_commit,
+    "container-imgref": "",
+    "deploy-via-container": "",
+    "osname": base_name,
+    "ostree-ref": args.build,
+    "ostree-container": f"{build_path}-ostree.{basearch}.ociarchive",
+    "metal-filename": f"{build_path}-metal.{basearch}.raw",
+    "metal4k-filename": f"{build_path}-metal4k.{basearch}.raw", 
+    "ostree-repo": repo,
+    "extra-kargs-string": "mitigations=auto,nosmt",
+    "image-type": "live-iso",
+    "cloud-image-size": "10240",
+    "metal-image-size": "2405",
+    "squashfs-compression": squashfs_compression,
+    "rootfs-size": 0,
+    "live-efiboot-img-size": 16
+}
 
-tmpisoroot = os.path.join(tmpdir, 'live')
-tmpisocoreos = os.path.join(tmpisoroot, 'coreos')
-tmpisoimages = os.path.join(tmpisoroot, 'images')
-tmpisoimagespxe = os.path.join(tmpisoimages, 'pxeboot')
-tmpisoisolinux = os.path.join(tmpisoroot, 'isolinux')
-# contents of initramfs on both PXE and ISO
-tmpinitrd_base = os.path.join(tmpdir, 'initrd')
-# contents of rootfs image
-tmpinitrd_rootfs = os.path.join(tmpdir, 'initrd-rootfs')
-
-for d in (tmpdir, tmpisoroot, tmpisocoreos, tmpisoimages, tmpisoimagespxe,
-        tmpisoisolinux, tmpinitrd_base, tmpinitrd_rootfs):
-    os.mkdir(d)
-
-# Size of file used to embed an Ignition config within a CPIO.
-ignition_img_size = 256 * 1024
-
-# Size of the file used to embed miniso data.
-miniso_data_file_size = 16 * 1024
+image_for_disk_json = "runvm.json"
+with open(image_for_disk_json, 'w') as file:
+    json.dump(data, file, indent=4)
 
 
-# The kernel requires that uncompressed cpio archives appended to an initrd
-# start on a 4-byte boundary.  If there's misalignment, it stops unpacking
-# and says:
-#
-#     Initramfs unpacking failed: invalid magic at start of compressed archive
-#
-# Append NUL bytes to destf until its size is a multiple of 4 bytes.
-#
-# https://www.kernel.org/doc/Documentation/early-userspace/buffer-format.txt
-# https://github.com/torvalds/linux/blob/47ec5303/init/initramfs.c#L463
+def update_buildmeta():
+    buildmeta['images'].update({
+        'live-iso': {
+            'path': iso_name,
+            'sha256': sha256sum_file(tmpisofile),
+            'skip-compression': True,
+        }
+    })
+    buildmeta['images'].update({
+        'live-kernel': {
+            'path': kernel_name,
+            'sha256': sha256sum_file(kernel_file),
+            'skip-compression': True,
+        },
+        'live-initramfs': {
+            'path': initramfs_name,
+            'sha256': sha256sum_file(initramfs_file),
+            'skip-compression': True,
+        },
+        'live-rootfs': {
+            'path': rootfs_name,
+            'sha256': sha256sum_file(rootfs_file),
+            'skip-compression': True,
+        }
+    })
+
+    buildmeta.write(artifact_name='live')
+    print(f"Updated: {buildmeta_path}")
+
 def align_initrd_for_uncompressed_append(destf):
     offset = destf.tell()
     if offset % 4:
@@ -214,6 +245,42 @@ def make_stream_hash(src, dest):
 
 
 def generate_iso():
+
+    tmpdir = os.environ.get("FORCE_TMPDIR", f"{workdir}/tmp/buildpost-live")
+    if os.path.isdir(tmpdir):
+        shutil.rmtree(tmpdir)
+    
+    tmpisoroot = os.path.join(tmpdir, 'live')
+    tmpisocoreos = os.path.join(tmpisoroot, 'coreos')
+    tmpisoimages = os.path.join(tmpisoroot, 'images')
+    tmpisoimagespxe = os.path.join(tmpisoimages, 'pxeboot')
+    tmpisoisolinux = os.path.join(tmpisoroot, 'isolinux')
+    # contents of initramfs on both PXE and ISO
+    tmpinitrd_base = os.path.join(tmpdir, 'initrd')
+    # contents of rootfs image
+    tmpinitrd_rootfs = os.path.join(tmpdir, 'initrd-rootfs')
+    
+    for d in (tmpdir, tmpisoroot, tmpisocoreos, tmpisoimages, tmpisoimagespxe,
+            tmpisoisolinux, tmpinitrd_base, tmpinitrd_rootfs):
+        os.mkdir(d)
+    
+    # Size of file used to embed an Ignition config within a CPIO.
+    ignition_img_size = 256 * 1024
+    
+    # Size of the file used to embed miniso data.
+    miniso_data_file_size = 16 * 1024
+    
+    
+    # The kernel requires that uncompressed cpio archives appended to an initrd
+    # start on a 4-byte boundary.  If there's misalignment, it stops unpacking
+    # and says:
+    #
+    #     Initramfs unpacking failed: invalid magic at start of compressed archive
+    #
+    # Append NUL bytes to destf until its size is a multiple of 4 bytes.
+    #
+    # https://www.kernel.org/doc/Documentation/early-userspace/buffer-format.txt
+    # https://github.com/torvalds/linux/blob/47ec5303/init/initramfs.c#L463
     # convention for kernel and initramfs names
     kernel_img = 'vmlinuz'
     initrd_img = 'initrd.img'
@@ -241,6 +308,7 @@ def generate_iso():
         img_metal4k = os.path.join(builddir, img_metal4k_obj['path'])
         img_metal4k_checksum = img_metal4k_obj['sha256']
 
+        
     # Find the directory under `/usr/lib/modules/<kver>` where the
     # kernel/initrd live. It will be the 2nd entity output by
     # `ostree ls <commit> /usr/lib/modules`
@@ -765,12 +833,6 @@ boot
     })
     shutil.move(tmpisofile, f"{builddir}/{iso_name}")
 
-    kernel_name = f'{base_name}-{args.build}-live-kernel-{basearch}'
-    initramfs_name = f'{base_name}-{args.build}-live-initramfs.{basearch}.img'
-    rootfs_name = f'{base_name}-{args.build}-live-rootfs.{basearch}.img'
-    kernel_file = os.path.join(builddir, kernel_name)
-    initramfs_file = os.path.join(builddir, initramfs_name)
-    rootfs_file = os.path.join(builddir, rootfs_name)
     shutil.copyfile(os.path.join(tmpisoimagespxe, kernel_img), kernel_file)
     shutil.move(pxe_initramfs, initramfs_file)
     shutil.move(pxe_rootfs, rootfs_file)
@@ -801,7 +863,21 @@ with open(build_semaphore, 'w') as f:
     f.write(f"{time.time_ns()}")
 
 try:
-    generate_iso()
+    if COSA_USE_LIVEISO is None:
+        generate_iso()
+    else:
+        command = [
+            "/usr/bin/cosa", "supermin-run",
+            "--cache",  "/usr/lib/coreos-assembler/runvm-osbuild",
+            "--config",
+            image_for_disk_json,
+            "--mpp",
+            f"/usr/lib/coreos-assembler/osbuild-manifests/coreos.osbuild.{basearch}.mpp.yaml",
+            "--filepath",
+            tmpisofile
+        ]
+        subprocess.run(command)
+        update_buildmeta()
 finally:
     if os.path.exists(build_semaphore):
         os.unlink(build_semaphore)
