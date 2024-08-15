@@ -59,6 +59,212 @@ pipelines:
           filename: efiboot.img
           size:
             mpp-format-string: '{live_efiboot_img_size_mb * 1024 * 1024}'
+
+      - type: org.osbuild.coreos.osmet
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              # XXX: we should rename this pipeline now that we don't use it as
+              # a buildroot
+              - name:build
+        devices:
+          metal:
+            type: org.osbuild.loopback
+            options:
+              filename: metal.raw
+              partscan: true
+              read-only: true
+              sector-size: 512
+          metal4k:
+            type: org.osbuild.loopback
+            options:
+              filename: metal4k.raw
+              partscan: true
+              read-only: true
+              sector-size: 4096
+        options:
+          image_type: "osmet"
+          fast: true
+      - type: org.osbuild.coreos.pre-squashfs
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              # XXX: we should rename this pipeline now that we don't use it as
+              # a buildroot
+              - name:build
+        devices:
+          metal:
+            type: org.osbuild.loopback
+            options:
+              filename: metal.raw
+              partscan: true
+              read-only: true
+              sector-size: 512
+      - type: org.osbuild.squashfs
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              # XXX: we should rename this pipeline now that we don't use it as
+              # a buildroot
+              - name:build
+        devices:
+          metal:
+            type: org.osbuild.loopback
+            options:
+              filename: metal.raw
+              partscan: true
+              read-only: true
+              sector-size: 512
+        options:
+          filename: "install.img"
+          compression:
+            method: "lz4"
+      - type: org.osbuild.coreos.live-iso
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              # XXX: we should rename this pipeline now that we don't use it as
+              # a buildroot
+              - name:build
+        devices:
+          metal:
+            type: org.osbuild.loopback
+            options:
+              filename: metal.raw
+              partscan: true
+              read-only: true
+              sector-size: 512
+          metal4k:
+            type: org.osbuild.loopback
+            options:
+              filename: metal4k.raw
+              partscan: true
+              read-only: true
+              sector-size: 4096
+          efiboot_img:
+            type: org.osbuild.loopback
+            options:
+              filename: efiboot.img
+        options:
+          efiboot_img_filename:
+            mpp-format-string: 'efiboot.img'
+          filename:
+            mpp-format-string: '{filename}'
+          squashfs_compression:
+            mpp-format-string: '{squashfs_compression}'
+      - type: org.osbuild.coreos.live-iso
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              # XXX: we should rename this pipeline now that we don't use it as
+              # a buildroot
+              - name:build
+        devices:
+          metal:
+            type: org.osbuild.loopback
+            options:
+              filename: metal.raw
+              partscan: true
+              read-only: true
+              sector-size: 512
+          metal4k:
+            type: org.osbuild.loopback
+            options:
+              filename: metal4k.raw
+              partscan: true
+              read-only: true
+              sector-size: 4096
+          efiboot_img:
+            type: org.osbuild.loopback
+            options:
+              filename: efiboot.img
+        options:
+          efiboot_img_filename:
+            mpp-format-string: 'efiboot.img'
+          filename:
+            mpp-format-string: '{filename}'
+          squashfs_compression:
+            mpp-format-string: '{squashfs_compression}'
+      - type: org.osbuild.coreos.live-iso
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              # XXX: we should rename this pipeline now that we don't use it as
+              # a buildroot
+              - name:build
+        devices:
+          metal:
+            type: org.osbuild.loopback
+            options:
+              filename: metal.raw
+              partscan: true
+              read-only: true
+              sector-size: 512
+          metal4k:
+            type: org.osbuild.loopback
+            options:
+              filename: metal4k.raw
+              partscan: true
+              read-only: true
+              sector-size: 4096
+          efiboot_img:
+            type: org.osbuild.loopback
+            options:
+              filename: efiboot.img
+        options:
+          efiboot_img_filename:
+            mpp-format-string: 'efiboot.img'
+          filename:
+            mpp-format-string: '{filename}'
+          squashfs_compression:
+            mpp-format-string: '{squashfs_compression}'
+      - type: org.osbuild.coreos.live-iso
+        inputs:
+          tree:
+            type: org.osbuild.tree
+            origin: org.osbuild.pipeline
+            references:
+              # XXX: we should rename this pipeline now that we don't use it as
+              # a buildroot
+              - name:build
+        devices:
+          metal:
+            type: org.osbuild.loopback
+            options:
+              filename: metal.raw
+              partscan: true
+              read-only: true
+              sector-size: 512
+          metal4k:
+            type: org.osbuild.loopback
+            options:
+              filename: metal4k.raw
+              partscan: true
+              read-only: true
+              sector-size: 4096
+          efiboot_img:
+            type: org.osbuild.loopback
+            options:
+              filename: efiboot.img
+        options:
+          efiboot_img_filename:
+            mpp-format-string: 'efiboot.img'
+          filename:
+            mpp-format-string: '{filename}'
+          squashfs_compression:
+            mpp-format-string: '{squashfs_compression}'
       - type: org.osbuild.coreos.live-iso
         inputs:
           tree:
