@@ -23,6 +23,12 @@ from cosalib.cmdlib import runcmd, sha256sum_file
 from cosalib.cmdlib import import_ostree_commit, get_basearch, ensure_glob
 from cosalib.meta import GenericBuildMeta
 
+# Size of file used to embed an Ignition config within a CPIO.
+IGNITION_IMG_SIZE = 256 * 1024
+
+# Size of the file used to embed miniso data.
+MINISO_DATA_FILE_SIZE = 16 * 1024
+
 live_exclude_kargs = set([
     '$ignition_firstboot',   # unsubstituted variable in grub config
     'console',               # no serial console by default on ISO
@@ -109,13 +115,6 @@ tmpinitrd_rootfs = os.path.join(tmpdir, 'initrd-rootfs')
 for d in (tmpdir, tmpisoroot, tmpisocoreos, tmpisoimages, tmpisoimagespxe,
         tmpisoisolinux, tmpinitrd_base, tmpinitrd_rootfs):
     os.mkdir(d)
-
-# Size of file used to embed an Ignition config within a CPIO.
-ignition_img_size = 256 * 1024
-
-# Size of the file used to embed miniso data.
-miniso_data_file_size = 16 * 1024
-
 
 # The kernel requires that uncompressed cpio archives appended to an initrd
 # start on a 4-byte boundary.  If there's misalignment, it stops unpacking
@@ -289,7 +288,7 @@ def generate_iso():
     # handled lower down
     if basearch != 's390x':
         with open(os.path.join(tmpisoimages, 'ignition.img'), 'wb') as fdst:
-            fdst.write(bytes(ignition_img_size))
+            fdst.write(bytes(IGNITION_IMG_SIZE))
         igninfo_json = {'file': 'images/ignition.img'}
 
     # Generate JSON file that lists OS features available to
@@ -512,7 +511,7 @@ def generate_iso():
         assert initramfs_size % 4 == 0
 
         # combine kernel, initramfs and cmdline using the mk-s390image tool
-        os.truncate(iso_initramfs, initramfs_size + ignition_img_size)
+        os.truncate(iso_initramfs, initramfs_size + IGNITION_IMG_SIZE)
         runcmd(['/usr/bin/mk-s390image',
                kernel_dest,
                os.path.join(tmpisoimages, 'cdboot.img'),
@@ -538,7 +537,7 @@ def generate_iso():
             igninfo_json = {
                 'file': 'images/cdboot.img',
                 'offset': offset + initramfs_size,
-                'length': ignition_img_size,
+                'length': IGNITION_IMG_SIZE,
             }
 
             # kargs are part of 'images/cdboot.img' blob
@@ -707,7 +706,7 @@ boot
 
     miniso_data = os.path.join(tmpisocoreos, "miniso.dat")
     with open(miniso_data, 'wb') as f:
-        f.truncate(miniso_data_file_size)
+        f.truncate(MINISO_DATA_FILE_SIZE)
 
     if args.fixture:
         # Replace or delete anything irrelevant to coreos-installer
