@@ -98,24 +98,6 @@ name_version = f'{base_name}-{args.build}'
 # version which may impede uniqueness.
 volid = name_version[0:32]
 
-tmpdir = os.environ.get("FORCE_TMPDIR", f"{workdir}/tmp/buildpost-live")
-if os.path.isdir(tmpdir):
-    shutil.rmtree(tmpdir)
-
-tmpisoroot = os.path.join(tmpdir, 'live')
-tmpisocoreos = os.path.join(tmpisoroot, 'coreos')
-tmpisoimages = os.path.join(tmpisoroot, 'images')
-tmpisoimagespxe = os.path.join(tmpisoimages, 'pxeboot')
-tmpisoisolinux = os.path.join(tmpisoroot, 'isolinux')
-# contents of initramfs on both PXE and ISO
-tmpinitrd_base = os.path.join(tmpdir, 'initrd')
-# contents of rootfs image
-tmpinitrd_rootfs = os.path.join(tmpdir, 'initrd-rootfs')
-
-for d in (tmpdir, tmpisoroot, tmpisocoreos, tmpisoimages, tmpisoimagespxe,
-        tmpisoisolinux, tmpinitrd_base, tmpinitrd_rootfs):
-    os.mkdir(d)
-
 # The kernel requires that uncompressed cpio archives appended to an initrd
 # start on a 4-byte boundary.  If there's misalignment, it stops unpacking
 # and says:
@@ -220,6 +202,24 @@ def generate_iso():
     rootfs_img = 'rootfs.img'
     kargs_file = 'kargs.json'
     igninfo_file = 'igninfo.json'
+
+    tmpdir = os.environ.get("FORCE_TMPDIR", f"{workdir}/tmp/buildpost-live")
+    if os.path.isdir(tmpdir):
+        shutil.rmtree(tmpdir)
+
+    tmpisoroot = os.path.join(tmpdir, 'live')
+    tmpisocoreos = os.path.join(tmpisoroot, 'coreos')
+    tmpisoimages = os.path.join(tmpisoroot, 'images')
+    tmpisoimagespxe = os.path.join(tmpisoimages, 'pxeboot')
+    tmpisoisolinux = os.path.join(tmpisoroot, 'isolinux')
+    # contents of initramfs on both PXE and ISO
+    tmpinitrd_base = os.path.join(tmpdir, 'initrd')
+    # contents of rootfs image
+    tmpinitrd_rootfs = os.path.join(tmpdir, 'initrd-rootfs')
+
+    for d in (tmpdir, tmpisoroot, tmpisocoreos, tmpisoimages, tmpisoimagespxe,
+            tmpisoisolinux, tmpinitrd_base, tmpinitrd_rootfs):
+        os.mkdir(d)
 
     tmpisofile = os.path.join(tmpdir, iso_name)
 
