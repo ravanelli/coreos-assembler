@@ -97,7 +97,16 @@ name_version = f'{base_name}-{args.build}'
 # to shorten this more intelligently, otherwise we truncate the
 # version which may impede uniqueness.
 volid = name_version[0:32]
-
+kernel_name = f'{base_name}-{args.build}-live-kernel-{basearch}'
+initramfs_name = f'{base_name}-{args.build}-live-initramfs.{basearch}.img'
+rootfs_name = f'{base_name}-{args.build}-live-rootfs.{basearch}.img'
+kernel_file = os.path.join(builddir, kernel_name)
+initramfs_file = os.path.join(builddir, initramfs_name)
+rootfs_file = os.path.join(builddir, rootfs_name)
+tmpdir = os.environ.get("FORCE_TMPDIR", f"{workdir}/tmp/buildpost-live")
+if os.path.isdir(tmpdir):
+    shutil.rmtree(tmpdir)
+tmpisofile = os.path.join(tmpdir, iso_name)
 # The kernel requires that uncompressed cpio archives appended to an initrd
 # start on a 4-byte boundary.  If there's misalignment, it stops unpacking
 # and says:
@@ -203,10 +212,6 @@ def generate_iso():
     kargs_file = 'kargs.json'
     igninfo_file = 'igninfo.json'
 
-    tmpdir = os.environ.get("FORCE_TMPDIR", f"{workdir}/tmp/buildpost-live")
-    if os.path.isdir(tmpdir):
-        shutil.rmtree(tmpdir)
-
     tmpisoroot = os.path.join(tmpdir, 'live')
     tmpisocoreos = os.path.join(tmpisoroot, 'coreos')
     tmpisoimages = os.path.join(tmpisoroot, 'images')
@@ -220,9 +225,6 @@ def generate_iso():
     for d in (tmpdir, tmpisoroot, tmpisocoreos, tmpisoimages, tmpisoimagespxe,
             tmpisoisolinux, tmpinitrd_base, tmpinitrd_rootfs):
         os.mkdir(d)
-
-    tmpisofile = os.path.join(tmpdir, iso_name)
-
     img_metal_obj = buildmeta.get_artifact_meta("metal", unmerged=True)["images"].get("metal")
     if not img_metal_obj:
         raise Exception("Live image generation requires `metal` image")
@@ -763,13 +765,6 @@ boot
         }
     })
     shutil.move(tmpisofile, f"{builddir}/{iso_name}")
-
-    kernel_name = f'{base_name}-{args.build}-live-kernel-{basearch}'
-    initramfs_name = f'{base_name}-{args.build}-live-initramfs.{basearch}.img'
-    rootfs_name = f'{base_name}-{args.build}-live-rootfs.{basearch}.img'
-    kernel_file = os.path.join(builddir, kernel_name)
-    initramfs_file = os.path.join(builddir, initramfs_name)
-    rootfs_file = os.path.join(builddir, rootfs_name)
     shutil.copyfile(os.path.join(tmpisoimagespxe, kernel_img), kernel_file)
     shutil.move(pxe_initramfs, initramfs_file)
     shutil.move(pxe_rootfs, rootfs_file)
