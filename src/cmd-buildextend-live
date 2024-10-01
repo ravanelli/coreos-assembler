@@ -29,6 +29,8 @@ IGNITION_IMG_SIZE = 256 * 1024
 # Size of the file used to embed miniso data.
 MINISO_DATA_FILE_SIZE = 16 * 1024
 
+COSA_OSBUILD_LIVEISO = os.getenv("COSA_OSBUILD_LIVEISO", "")
+
 live_exclude_kargs = set([
     '$ignition_firstboot',   # unsubstituted variable in grub config
     'console',               # no serial console by default on ISO
@@ -97,12 +99,39 @@ name_version = f'{base_name}-{args.build}'
 # to shorten this more intelligently, otherwise we truncate the
 # version which may impede uniqueness.
 volid = name_version[0:32]
+build_path = os.path.abspath(f"{builddir}/{base_name}-{args.build}")
 kernel_name = f'{base_name}-{args.build}-live-kernel-{basearch}'
 initramfs_name = f'{base_name}-{args.build}-live-initramfs.{basearch}.img'
 rootfs_name = f'{base_name}-{args.build}-live-rootfs.{basearch}.img'
 kernel_file = os.path.join(builddir, kernel_name)
 initramfs_file = os.path.join(builddir, initramfs_name)
 rootfs_file = os.path.join(builddir, rootfs_name)
+
+if COSA_OSBUILD_LIVEISO != "":
+    data = {
+        "buildid": args.build,
+        "imgid": iso_name,
+        "ostree-commit": buildmeta_commit,
+        "container-imgref": "",
+        "deploy-via-container": "",
+        "osname": base_name,
+        "ostree-ref": args.build,
+        "ostree-container": f"{build_path}-ostree.{basearch}.ociarchive",
+        "metal-filename": f"{build_path}-metal.{basearch}.raw",
+        "metal4k-filename": f"{build_path}-metal4k.{basearch}.raw",
+        "ostree-repo": repo,
+        "extra-kargs-string": "mitigations=auto,nosmt",
+        "image-type": "live-iso",
+        "cloud-image-size": "10240",
+        "metal-image-size": "2405",
+        "squashfs-compression": squashfs_compression,
+        "rootfs-size": 0,
+        "live-efiboot-img-size": 16
+    }
+
+    image_for_disk_json = "runvm.json"
+    with open(image_for_disk_json, 'w') as file:
+        json.dump(data, file, indent=4)
 # The kernel requires that uncompressed cpio archives appended to an initrd
 # start on a 4-byte boundary.  If there's misalignment, it stops unpacking
 # and says:
@@ -117,6 +146,35 @@ def align_initrd_for_uncompressed_append(destf):
     offset = destf.tell()
     if offset % 4:
         destf.write(b'\0' * (4 - offset % 4))
+
+
+def update_buildmeta():
+    buildmeta['images'].update({
+        'live-iso': {
+            'path': iso_name,
+            'sha256': sha256sum_file(tmpisofile),
+            'skip-compression': True,
+        }
+    })
+    buildmeta['images'].update({
+        'live-kernel': {
+            'path': kernel_name,
+            'sha256': sha256sum_file(kernel_file),
+            'skip-compression': True,
+        },
+        'live-initramfs': {
+            'path': initramfs_name,
+            'sha256': sha256sum_file(initramfs_file),
+            'skip-compression': True,
+        },
+        'live-rootfs': {
+            'path': rootfs_name,
+            'sha256': sha256sum_file(rootfs_file),
+            'skip-compression': True,
+        }
+    })
+    buildmeta.write(artifact_name='live')
+    print(f"Updated: {buildmeta_path}")
 
 
 # Return OS features table for features.json, which is read by
@@ -798,7 +856,24 @@ with open(build_semaphore, 'w') as f:
     f.write(f"{time.time_ns()}")
 
 try:
-    generate_iso()
+    if COSA_OSBUILD_LIVEISO == "":
+        generate_iso()
+    else:
+        command = [
+            "/usr/bin/cosa", "supermin-run",
+            "--cache",  "/usr/lib/coreos-assembler/runvm-osbuild",
+            "--config",
+            image_for_disk_json,
+            "--mpp",
+            f"/usr/lib/coreos-assembler/osbuild-manifests/coreos.osbuild.{basearch}.mpp.yaml",
+            "--filepath",
+            tmpisofile
+        ]
+        subprocess.run(command)
+        update_buildmeta()
+        # Extract live artifacts from ISO. OSBUILD does not support an output with multiple files
+        command = ["coreos-installer", "iso", "extract", "pxe", tmpisofile]
+        subprocess.run(command)
 finally:
     if os.path.exists(build_semaphore):
         os.unlink(build_semaphore)
