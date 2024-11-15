@@ -59,6 +59,11 @@ container_imgref=$(getconfig "container-imgref")
 container_repo=$(getconfig_def "container-repo" "")
 container_tag=$(getconfig_def "container-tag" "")
 extra_kargs=$(getconfig "extra-kargs-string" "")
+squashfs_compression=$(getconfig_def "squashfs-compression" "")
+live_efiboot_img_size_mb=$(getconfig_def "live-efiboot-img-size" "0")
+echo  "here"
+echo "$squashfs_compression"
+echo "$live_efiboot_img_size_mb"
 # If we are not deploying via container let's go ahead and
 # set the OSTree repo and ref information
 ostree_ref=""
@@ -109,6 +114,8 @@ osbuild-mpp                                               \
     -D metal_image_size_mb="${metal_image_size_mb}"       \
     -D cloud_image_size_mb="${cloud_image_size_mb}"       \
     -D rootfs_size_mb="${rootfs_size_mb}"                 \
+    -D squashfs_compression=\""${squashfs_compression}"\" \
+    -D live_efiboot_img_size_mb="${live_efiboot_img_size_mb}" \
     "${mppyaml}" "${processed_json}"
 
 # Build the image
@@ -120,6 +127,8 @@ osbuild \
     --checkpoint build           \
     --checkpoint tree            \
     --checkpoint raw-image       \
+    --checkpoint raw-metal-image       \
+    --checkpoint raw-meta4k-image      \
     ${platforms[@]/#/--export=}  \
     "${processed_json}"
 

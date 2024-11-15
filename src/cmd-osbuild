@@ -15,6 +15,7 @@ declare -A SUPPORTED_PLATFORMS=(
     ['metal']='raw'
     ['qemu']='qcow2'
     ['qemu-secex']='qcow2'
+    ['live-iso']='iso'
 )
 
 print_help() {
@@ -153,7 +154,8 @@ generate_runvm_osbuild_config() {
     # Grab a few values from $image_json
     deploy_via_container=$(getconfig_def "deploy-via-container" "" "${image_json}")
     extra_kargs="$(python3 -c 'import sys, json; args = json.load(sys.stdin)["extra-kargs"]; print(" ".join(args))' < "${image_json}")"
-
+    squashfs_compression=$(getconfig_def "squashfs-compression" "" "${image_json}")
+    live_efiboot_img_size_mb=$(getconfig_def "live-efiboot-img-size" "0" "${image_json}")
     # OStree container ociarchive file path
     ostree_container="${builddir}/$(meta_key images.ostree.path)"
     # If no container_imgref was set let's just set it to some professional
@@ -166,6 +168,7 @@ generate_runvm_osbuild_config() {
     # and doing so has apparently negative performance implications.
     ostree_size_json="$(/usr/lib/coreos-assembler/estimate-commit-disk-size --repo "$ostree_repo" "$ostree_commit" --add-percent 35)"
     rootfs_size_mb="$(jq '."estimate-mb".final' <<< "${ostree_size_json}")"
+    
     # The minimum size of a disk image we'll need will be the rootfs_size
     # estimate plus the size of the non-root partitions. We'll use this
     # size for the metal images, but for the IaaS/virt image we'll use
@@ -197,6 +200,8 @@ extra-kargs-string: "${extra_kargs}"
 ostree-repo: "${ostree_repo}"
 metal-image-size: "${metal_image_size_mb}"
 cloud-image-size: "${cloud_image_size_mb}"
+live-efiboot-img-size: "${live_efiboot_img_size_mb}"
+squashfs-compression: "${squashfs_compression}"
 # Note: this is only used in the secex case; there, the rootfs is
 # not the last partition on the disk so we need to explicitly size it
 rootfs-size: "${rootfs_size_mb}"
@@ -219,6 +224,7 @@ main() {
         "cmd-buildextend-qemu") platforms=(qemu);;
         "cmd-buildextend-qemu-secex") platforms=(qemu-secex);;
         "cmd-buildextend-secex") platforms=(qemu-secex);;
+	"cmd-buildextend-live") platforms=(live-iso);;
         *) fatal "called as unexpected name $0";;
     esac
 
