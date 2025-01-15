@@ -254,10 +254,6 @@ func GetCommandBuildableArtifacts() []string {
 func (build *Build) artifacts() map[string]*Artifact {
 	ret := make(map[string]*Artifact)
 
-	// Special case Extensions
-	// technically extentions are an artifact, albeit the meta-data located
-	// as a top level entry.
-	ret["extensions"] = build.Extensions.toArtifact()
 
 	var ba BuildArtifacts = *build.BuildArtifacts
 	rv := reflect.TypeOf(ba)
@@ -305,17 +301,6 @@ func (b *Build) mergeMeta(r io.Reader) error {
 func IsMetaJSON(path string) bool {
 	b := filepath.Base(path)
 	return reMetaJSON.Match([]byte(b))
-}
-
-// toArtifact converts an Extension to an Artifact
-func (e *Extensions) toArtifact() *Artifact {
-	if e == nil {
-		return new(Artifact)
-	}
-	return &Artifact{
-		Path:   e.Path,
-		Sha256: e.Sha256,
-	}
 }
 
 func FetchAndParseBuild(url string) (*Build, error) {

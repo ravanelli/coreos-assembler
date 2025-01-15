@@ -129,9 +129,6 @@ type Cloudartifact struct {
 
 type Extensions struct {
 	Manifest       map[string]interface{} `json:"manifest"`
-	Path           string                 `json:"path"`
-	RpmOstreeState string                 `json:"rpm-ostree-state"`
-	Sha256         string                 `json:"sha256"`
 }
 
 type Gcp struct {

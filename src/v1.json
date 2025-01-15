@@ -702,9 +702,6 @@
       "type": "object",
       "title": "Extensions",
       "required": [
-        "path",
-        "sha256",
-        "rpm-ostree-state",
         "manifest"
       ],
       "properties": {

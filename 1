@@ -36,6 +36,7 @@ img=localhost/extensions-container
     --volume /etc/pki/ca-trust:/etc/pki/ca-trust:ro \
     --volume "${ctx_dir}/package_extensions:/extensions" \
     -t "${img}" -f extensions/Dockerfile "${ctx_dir}")
+ls -la ${ctx_dir}/package_extensions
 mv "${ctx_dir}/package_extensions/extensions.json" ./tmp
 
 # Call skopeo to export it from the container storage to an oci-archive.

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
+        "io/ioutil"
 
 	cosamodel "github.com/coreos/coreos-assembler/internal/pkg/cosa"
 	"github.com/coreos/coreos-assembler/internal/pkg/cosash"
@@ -119,13 +120,49 @@ func generateHotfixes() (string, error) {
 
 	return out, nil
 }
-
+//func updateExtensionsMeta() error {
+//
+//	cosaBuild, _, err := cosa.ReadBuild("builds", "", "")
+//        if err != nil {
+//                return err
+//        }
+//        fmt.Printf("EXTEM:%s", cosaBuild.Extensions)
+//        arch := cosa.BuilderArch()
+//        buildID := cosaBuild.BuildID
+//
+//        workdir, err := filepath.Abs(".")
+//        if err != nil {
+//                return err
+//        }
+//
+//	fmt.Printf("Finishing")
+//
+//	cosaBuild.MetaStamp = float64(time.Now().UnixNano())
+//	err = cosaBuild.WriteMeta("./builds/latest/x86_64/meta.json", true)
+//        if err != nil {
+//            fmt.Println("Failed to write meta:", err)
+//        } else {
+//            fmt.Println("Meta successfully written!")
+//        }
+//
+//	return nil
+//
+//}
 func buildExtensionContainer() error {
+
 	cosaBuild, buildPath, err := cosa.ReadBuild("builds", "", "")
 	if err != nil {
 		return err
 	}
+
+	arch := cosa.BuilderArch()
 	buildID := cosaBuild.BuildID
+
+	workdir, err := filepath.Abs(".")
+        if err != nil {
+                return err
+        }
+
 	fmt.Printf("Generating extensions container for build: %s\n", buildID)
 
 	hotfixPath, err := generateHotfixes()
@@ -133,7 +170,6 @@ func buildExtensionContainer() error {
 		return fmt.Errorf("generating hotfixes failed: %w", err)
 	}
 
-	arch := cosa.BuilderArch()
 	sh, err := cosash.NewCosaSh()
 	if err != nil {
 		return err
@@ -185,30 +221,82 @@ func buildExtensionContainer() error {
 		SizeInBytes:     float64(stat.Size()),
 		SkipCompression: true,
 	}
+
+        fmt.Printf("Generating meta package extensions for: %s\n", buildID)
+	extensionsFilePath:= "./tmp/extensions.json"
+	fileContent, err := os.ReadFile(extensionsFilePath)
+	if err != nil {
+		fmt.Printf("Error reading JSON file: %v\n", err)
+		return err
+	}
+	// Parse the JSON content into a map
+	packages := make(map[string]string)
+	err = json.Unmarshal(fileContent, &packages)
+	if err != nil {
+		fmt.Printf("Error parsing JSON content: %v\n", err)
+		return err
+	}
+
+	// Convert to extensionsInterfaceMap if needed
+	extensionsInterfaceMap := make(map[string]interface{})
+	for key, value := range packages {
+		extensionsInterfaceMap[key] = value
+	}
+	// Create extensions tar ball in the rigth place
+	extensionsfilePath := fmt.Sprintf("%s/builds/latest/%s/%s-%s-extensions.%s.tar",
+		workdir,
+		arch,
+		cosaBuild.Name,
+		buildID,
+		arch)
+	cmd := exec.Command("tar", "-cf", extensionsfilePath, "-C", "./tmp", "extensions.json")
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+        err = cmd.Run()
+        if err != nil {
+                return err
+        }
+	cosaBuild.Extensions = &cosa.Extensions { 
+		Manifest:        extensionsInterfaceMap,
+	//	Path:            extensionsfilePath,
+//		RpmOstreeState:  "50ac76b51fccfe9cd628f009e3513747c3c9c0ca645315dfea249fc37b2a176e4874b84afe437d86a3e964d25cec91d764af007164b4424b603b7fcd2718009f",
+//		Sha256: "0730763fda37a1aef901f80e2c4f707c3b256a04c71c391f881359b90e23d5cb",
+
+        }
 	cosaBuild.MetaStamp = float64(time.Now().UnixNano())
 
 	newBytes, err := json.MarshalIndent(cosaBuild, "", "    ")
+
+
 	if err != nil {
 		return err
 	}
+
 	extensions_container_meta_path := filepath.Join(buildPath, "meta.extensions-container.json")
 	err = os.WriteFile(extensions_container_meta_path, newBytes, 0644)
 	if err != nil {
 		return errors.Wrapf(err, "writing %s", extensions_container_meta_path)
 	}
-	defer os.Remove(extensions_container_meta_path)
-	workdir, err := filepath.Abs(".")
+	content, err := ioutil.ReadFile(extensions_container_meta_path)
 	if err != nil {
-		return err
+		fmt.Println("New Bytes%s", newBytes)
+
 	}
+
+	// Print the file content
+	fmt.Println(string(content))
+	defer os.Remove(extensions_container_meta_path)
 	abs_new_json, err := filepath.Abs(extensions_container_meta_path)
 	if err != nil {
 		return err
 	}
+
 	// Calling `cosa meta` as it locks the file and we need to make sure no other process writes to the file at the same time.
 	// Golang does not appear to have a public api to lock files at the moment. https://github.com/coreos/coreos-assembler/issues/3149
+
 	if err := exec.Command("cosa", "meta", "--workdir", workdir, "--build", buildID, "--artifact-json", abs_new_json).Run(); err != nil {
 		return errors.Wrapf(err, "calling `cosa meta`")
 	}
+//	updateExtensionsMeta()
 	return nil
 }
