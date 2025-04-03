@@ -106,13 +106,19 @@ class Build(_Build):
         # image_name_base() member that wants a platform string to name stuff
         self.platform = "koji"
         # Use a tempdir in builds/ because we want to use large scratch space
-        self._tmpdir = tempfile.mkdtemp(prefix="koji-build", dir="builds/")
+        
+        self._tmpdir = tempfile.mkdtemp(prefix="koji-build", dir=kwargs['buildroot'])
         self._state_file_tpl = self._tmpdir + "/cosa-cmd-koji-upload-{name}-{version}-{release}"
         kwargs.update({
             "require_commit": True,
             "require_cosa": True,
         })
-        _Build.__init__(self, **kwargs)
+        if "nodeimage" in kwargs:
+            self._basearch = kwargs['arch']
+            self._found_files = {}
+            self._build_dir = kwargs['buildroot']
+        else:
+            _Build.__init__(self, **kwargs)
 
     def __del__(self):
         try:
@@ -283,8 +289,12 @@ class Build(_Build):
         """
         # locate all the build artifacts in the build directory.
         files = []
-        for ffile in os.listdir(self.build_dir):
-            files.append(os.path.join(self.build_dir, ffile))
+        if "buildroot" in kwargs: 
+            rootdir = kwargs['buildroot']
+        else:
+            rootdir = self.build_dir
+        for ffile in os.listdir(rootdir):
+            files.append(os.path.join(rootdir, ffile))
             if os.path.islink(ffile):
                 log.debug(f" * EXCLUDING symlink {ffile}")
                 log.debug(f" *    target {os.path.realpath(ffile)}")
@@ -484,7 +494,7 @@ class Reserve(_KojiBase):
         """
         super().__init__(profile)
 
-    def reserve_id(self, build, create_file=None):
+    def reserve_id(self, **kwargs):
         """
         Reserves a koji id for use during upload. This must be called
         after build a meta.json is available for review.
@@ -503,35 +513,55 @@ class Reserve(_KojiBase):
         #   Version = 414.92.202307170903
         #   Release = 0
         #   NVR = rhcos-x86_64-414.92.202307170903-0
-        version, release = build.build_id.split('-')
+
+        if 'brew' in kwargs:
+           brew = kwargs['brew'] 
+           version, release = brew['version'], brew['release']
+           name = brew['name'] 
+        else:
+            build = kwargs['build']
+            version, release = build.build_id.split('-')
+            name = f"{build.build_name}-{build.basearch}"
         data = {
-            "name": f"{build.build_name}-{build.basearch}",
+            "name": name,
             "release": release,
             "version": version,
             "cg": "coreos-assembler",
         }
-
         log.debug(f"reserve payload {data}")
         koji_reservation = self.session.CGInitBuild(data['cg'], data)
         log.info(f"Koji reservation id created: {koji_reservation['build_id']}")
 
-        if create_file is not None:
-            state_file = build._state_file_tpl.format(
-                name=data['name'],
-                version=data['version'],
-                release=data['release'],
-                build_id=koji_reservation['build_id'],
-                token=koji_reservation['token'])
-            write_json(state_file, (data, koji_reservation))
-            log.info(f"reserve data written to {state_file}")
+        if 'create_file' in kwargs:
+            data = {
+                "name": data["name"],
+                "version": data["version"],
+                "release": data["release"],
+                "build_id": koji_reservation["build_id"],
+                "token": koji_reservation["token"]
+            }
+            state_file = tempfile.NamedTemporaryFile(delete=False, suffix='.json', dir='/tmp') 
+            write_json(state_file.name, data)
+            log.info(f"reserve data written to {state_file.name}")
             return state_file
 
-        build.meta['koji'] = {
+        meta = {
             'build_id': koji_reservation['build_id'],
             'token': koji_reservation['token'],
             'release': release
-        }
-        build.meta_write()
+        }        
+
+        if brew:
+            # The meta is not part of the build dir:
+            meta_file_path = f"{kwargs['buildroot']}/meta.json"
+            with open(meta_file_path) as f:
+                data = json.load(f)
+                data["koji"] = meta
+            with open(meta_file_path, "w") as f:
+               json.dump(data, f, indent=2)
+        else:
+            build.meta['koji'] = meta
+            build.meta_write()
 
 
 class Upload(_KojiBase):
@@ -682,9 +712,9 @@ class Upload(_KojiBase):
             if os.path.isfile(self._reserve_id_file):
                 log.debug(f"loading reservation data from state file {self._reserve_id_file}")
                 data = load_json(self._reserve_id_file)
-                self._build_id = data[1]['build_id']
-                self._release = data[0]['release']
-                self._token = data[1]["token"]
+                self._build_id = data['build_id']
+                self._release = data['release']
+                self._token = data["token"]
 
                 self.build.meta['koji'] = {
                     'build_id': self._build_id
@@ -795,7 +825,7 @@ class Upload(_KojiBase):
         if task_result != 0:
             raise Exception('failed to tag builds')
 
-    def upload(self):
+    def upload(self, serverdir=None):
         """
         Upload all files to a remote directory in Koji. Content generators
         upload all the artifacts first and then imports them based on the
@@ -806,7 +836,10 @@ class Upload(_KojiBase):
         a symlink is created in temporary directory and is used as the upload
         file.
         """
-        serverdir = klib.unique_path(f"{self.build.build_id}-cosa")
+        if serverdir is not None:
+            serverdir = f"{serverdir}-cosa"
+        else:
+            serverdir = klib.unique_path(f"{self.build.build_id}-cosa")
         log.debug(f"uploading files to {serverdir}")
         meta_path = ""
         meta_remote_path = ""
@@ -929,7 +962,8 @@ Environment variables are supported:
                         help="Do not upload, just parse the build")
     parent_parser.add_argument("--arch", default=get_basearch(),
                         help="Set the build architecture")
-
+    parent_parser.add_argument("--node-image", action='store_true', required=False,
+                        help="Set the build architecture")
     # Koji specific options
     parent_parser.add_argument("--no-auth", action='store_false', dest="auth",
                         help="Skip Kerberos auth, use if already auth'd")
@@ -1012,7 +1046,14 @@ Environment variables are supported:
 
     args = parser.parse_args(namespace=args)
 
-    build = Build(buildroot=args.buildroot, build=args.build, arch=args.arch)
+    if args.node_image:
+        build = ""
+        brew_info = {}
+        brew_info['release'] = args.node_image
+        brew_info['version'] = "0" 
+        brew_info['name'] = f"rhco/Bs-{args.arch}"
+
+    build = Build(buildroot=args.buildroot, build=args.build, arch=args.arch, nodeimage=True)
 
     if args.auth:
         kinit(args.keytab, args.owner)
@@ -1040,11 +1081,14 @@ Environment variables are supported:
             upload._s3_bucket = args.s3_bucket
             upload._s3_key = args.s3_key
             upload._s3_url = args.s3_url
+        if args.node_image:
+            build.build_artifacts(buildroot=args.buildroot)
+            upload.upload(brew_info['release'])
+        if not args.node_image:
+            build.build_artifacts()
 
-        build.build_artifacts()
-        upload.upload()
     elif args._command == 'reserve-id':
-        return Reserve(args.profile).reserve_id(build, "create_file")
+        return Reserve(args.profile).reserve_id(build=build, buildroot=args.buildroot, brew=brew_info, create_file=True)
 
 
 if __name__ == '__main__':
