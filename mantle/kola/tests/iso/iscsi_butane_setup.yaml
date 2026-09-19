@@ -11,6 +11,23 @@ storage:
       label: var
       with_mount_unit: true
   files:
+    - path: /etc/NetworkManager/system-connections/iscsi-network.nmconnection
+      mode: 0600
+      contents:
+        inline: |
+          [connection]
+          id=iscsi-network-copy-test-2026
+          type=ethernet
+          interface-name=iscsi-copy-test0
+          autoconnect=false
+
+          [ethernet]
+
+          [ipv4]
+          method=disabled
+
+          [ipv6]
+          method=disabled
     - path: /etc/containers/systemd/targetd.container
       contents:
         inline: |
@@ -83,6 +100,7 @@ storage:
           coreos-installer install \
             /dev/disk/by-path/ip-127.0.0.1\:3260-iscsi-iqn.2024-05.com.coreos\:0-lun-0 \
             COREOS_INSTALLER_KARGS \
+            COREOS_INSTALLER_COPY_NETWORK \
             --console ttyS0,115200n8 \
             -i /var/nested-ign.json
           # Unmount the disk
@@ -138,6 +156,11 @@ storage:
             },
             "systemd": {
               "units": [
+                {
+                  "contents": "[Unit]\nDescription=Verify copied NetworkManager connection\nBefore=multi-user.target\n\n[Service]\nType=oneshot\nExecStart=/bin/sh -c 'test -f /etc/NetworkManager/system-connections/iscsi-network.nmconnection \u0026\u0026 grep -Fx \"id=iscsi-network-copy-test-2026\" /etc/NetworkManager/system-connections/iscsi-network.nmconnection \u0026\u0026 echo \"iscsi-copy-network-ok\" \u003e/dev/virtio-ports/testisocompletion'\n\n[Install]\nRequiredBy=multi-user.target\n",
+                  "enabled": COREOS_COPY_NETWORK_ENABLED,
+                  "name": "verify-copy-network.service"
+                },
                 {
                   "contents": "[Unit]\nDescription=iSCSI Boot Signal Completion\nAfter=multi-user.target\nOnFailure=emergency.target\nOnFailureJobMode=isolate\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/sh -c '/usr/bin/echo \"iscsi-boot-ok\" \u003e/dev/virtio-ports/testisocompletion \u0026\u0026 systemctl poweroff'\n[Install]\nRequiredBy=multi-user.target\n",
                   "enabled": true,

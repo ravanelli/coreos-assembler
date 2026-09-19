@@ -23,6 +23,7 @@ var (
 		"iso-offline-install-iscsi.ibft.uefi",
 		"iso-offline-install-iscsi.ibft-with-mpath.bios",
 		"iso-offline-install-iscsi.manual.bios",
+		"iso-offline-install-iscsi.manual.copy-network.bios",
 	}
 	tests_iscsi_s390x = []string{
 		// FIXME https://github.com/coreos/fedora-coreos-tracker/issues/1657
@@ -67,7 +68,8 @@ func init() {
 		opts.machineOpts.MinMemory = 2048
 		register.RegisterTest(&register.Test{
 			Run: func(c cluster.TestCluster) {
-				testLiveSCSI(c, opts)
+				copyNetwork := strings.Contains(testName, ".copy-network.")
+				testLiveSCSI(c, opts, copyNetwork)
 			},
 			ClusterSize:         1,
 			TestManagedMachines: true,
@@ -112,7 +114,7 @@ var iscsi_butane_config string
 // 6 - /var/nested-ign.json contains an ignition config:
 //   - when the system is booted, write a success string to /dev/virtio-ports/testisocompletion
 //   - as this serial device is mapped to the host serial device, the test concludes
-func testLiveSCSI(c cluster.TestCluster, opts IsoTestOpts) {
+func testLiveSCSI(c cluster.TestCluster, opts IsoTestOpts, copyNetwork bool) {
 	EnsureLiveArtifactsExist(c)
 
 	qc, ok := c.Cluster.(*qemu.Cluster)
@@ -128,6 +130,14 @@ func testLiveSCSI(c cluster.TestCluster, opts IsoTestOpts) {
 		butane = strings.ReplaceAll(iscsi_butane_config, "COREOS_INSTALLER_KARGS", "--append-karg rd.iscsi.firmware=1")
 	} else if opts.manual {
 		butane = strings.ReplaceAll(iscsi_butane_config, "COREOS_INSTALLER_KARGS", "--append-karg netroot=iscsi:10.0.2.15::::iqn.2024-05.com.coreos:0")
+	}
+
+	if copyNetwork {
+		butane = strings.ReplaceAll(butane, "COREOS_INSTALLER_COPY_NETWORK", "--copy-network")
+		butane = strings.ReplaceAll(butane, "COREOS_COPY_NETWORK_ENABLED", "true")
+	} else {
+		butane = strings.ReplaceAll(butane, "COREOS_INSTALLER_COPY_NETWORK", "")
+		butane = strings.ReplaceAll(butane, "COREOS_COPY_NETWORK_ENABLED", "false")
 	}
 	var iscsiTargetConfig = conf.Butane(butane)
 	config, err := iscsiTargetConfig.Render(conf.FailWarnings)
@@ -154,8 +164,12 @@ func testLiveSCSI(c cluster.TestCluster, opts IsoTestOpts) {
 		if err != nil {
 			return errors.Wrap(err, "setting up virtio-serial channel")
 		}
+		expectedOutput := []string{"iscsi-boot-ok"}
+		if copyNetwork {
+			expectedOutput = []string{"iscsi-copy-network-ok"}
+		}
 		go func() {
-			errchan <- CheckTestOutput(completionChannel, []string{"iscsi-boot-ok"})
+			errchan <- CheckTestOutput(completionChannel, expectedOutput)
 		}()
 
 		// Create a serial channel to read the logs from the nested VM
